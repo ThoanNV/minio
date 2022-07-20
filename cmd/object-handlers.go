@@ -1037,7 +1037,10 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 
 	// Check if bucket encryption is enabled
 	sseConfig, _ := globalBucketSSEConfigSys.Get(dstBucket)
-	sseConfig.Apply(r.Header, globalAutoEncryption)
+	sseConfig.Apply(r.Header, sse.ApplyOptions{
+		AutoEncrypt: globalAutoEncryption,
+		Passthrough: globalIsGateway && globalGatewayName == S3BackendGateway,
+	})
 
 	var srcOpts, dstOpts ObjectOptions
 	srcOpts, err := copySrcOpts(ctx, r, srcBucket, srcObject)
