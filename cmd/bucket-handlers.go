@@ -435,8 +435,12 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 	objects := make([]ObjectV, len(deleteObjectsReq.Objects))
 	// Convert object name delete objects if it has `/` in the beginning.
 	for i := range deleteObjectsReq.Objects {
-		deleteObjectsReq.Objects[i].ObjectName = trimLeadingSlash(deleteObjectsReq.Objects[i].ObjectName)
+		deleteObject := deleteObjectsReq.Objects[i]
+		objectName := trimLeadingSlash(deleteObject.ObjectName)
+		deleteObjectsReq.Objects[i].ObjectName = objectName
 		objects[i] = deleteObjectsReq.Objects[i].ObjectV
+		// Copy Object to Trash
+		api.CopyObjectToTrash(w, r, bucket, objectName)
 	}
 
 	// Make sure to update context to print ObjectNames for multi objects.
