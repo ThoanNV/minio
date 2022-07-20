@@ -963,20 +963,34 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 
 	objectAPI := api.ObjectAPI()
 	if objectAPI == nil {
-
-		logger.Error(r.URL.Path + " " + "ErrServerNotInitialized")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrServerNotInitialized), r.URL)
 		return
 	}
 
-	if _, ok := crypto.IsRequested(r.Header); ok && !objectAPI.IsEncryptionSupported() {
+	if crypto.Requested(r.Header) {
+		if globalIsGateway {
+			if crypto.SSEC.IsRequested(r.Header) && !objectAPI.IsEncryptionSupported() {
+				writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrNotImplemented), r.URL)
+				return
+			}
+		} else {
+			if !objectAPI.IsEncryptionSupported() {
+				writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrNotImplemented), r.URL)
+				return
+			}
+		}
+	}
 
-		logger.Error(r.URL.Path + " " + "ErrNotImplemented")
+	vars := mux.Vars(r)
+	dstBucket := vars["bucket"]
+	dstObject, err := unescapePath(vars["object"])
+	if err != nil {
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 
 	if s3Error := checkRequestAuthType(ctx, r, policy.PutObjectAction, dstBucket, dstObject); s3Error != ErrNone {
-
-		logger.Error(r.URL.Path + " " + s3Error.String())
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
 	}
 
@@ -986,12 +1000,13 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	if u, err := url.Parse(cpSrcPath); err == nil {
 		vid = strings.TrimSpace(u.Query().Get(xhttp.VersionID))
 		// Note that url.Parse does the unescaping
+		cpSrcPath = u.Path
 	}
 
+	srcBucket, srcObject := path2BucketObject(cpSrcPath)
 	// If source object is empty or bucket is empty, reply back invalid copy source.
 	if srcObject == "" || srcBucket == "" {
-
-		logger.Error(r.URL.Path + " " + "ErrInvalidCopySource")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopySource), r.URL)
 		return
 	}
 
@@ -1008,30 +1023,26 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	}
 
 	if s3Error := checkRequestAuthType(ctx, r, policy.GetObjectAction, srcBucket, srcObject); s3Error != ErrNone {
-
-		logger.Error(r.URL.Path + " " + s3Error.String())
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
 	}
 
 	// Check if metadata directive is valid.
 	if !isDirectiveValid(r.Header.Get(xhttp.AmzMetadataDirective)) {
-
-		logger.Error(r.URL.Path + " " + "ErrInvalidMetadataDirective")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidMetadataDirective), r.URL)
 		return
 	}
 
 	// check if tag directive is valid
 	if !isDirectiveValid(r.Header.Get(xhttp.AmzTagDirective)) {
-
-		logger.Error(r.URL.Path + " " + "ErrInvalidTagDirective")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidTagDirective), r.URL)
 		return
 	}
 
 	// Validate storage class metadata if present
 	dstSc := r.Header.Get(xhttp.AmzStorageClass)
 	if dstSc != "" && !storageclass.IsValid(dstSc) {
-
-		logger.Error(r.URL.Path + " " + "ErrInvalidStorageClass")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidStorageClass), r.URL)
 		return
 	}
 
@@ -1043,17 +1054,20 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	})
 
 	var srcOpts, dstOpts ObjectOptions
-	srcOpts, err := copySrcOpts(ctx, r, srcBucket, srcObject)
+	srcOpts, err = copySrcOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 		logger.LogIf(ctx, err)
-
-		logger.Error(r.URL.Path + " " + err.Error())
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 	srcOpts.VersionID = vid
 
 	// convert copy src encryption options for GET calls
-	var getOpts = ObjectOptions{VersionID: srcOpts.VersionID, Versioned: srcOpts.Versioned}
+	getOpts := ObjectOptions{
+		VersionID:        srcOpts.VersionID,
+		Versioned:        srcOpts.Versioned,
+		VersionSuspended: srcOpts.VersionSuspended,
+	}
 	getSSE := encrypt.SSE(srcOpts.ServerSideEncryption)
 	if getSSE != srcOpts.ServerSideEncryption {
 		getOpts.ServerSideEncryption = getSSE
@@ -1062,7 +1076,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	dstOpts, err = copyDstOpts(ctx, r, dstBucket, dstObject, nil)
 	if err != nil {
 		logger.LogIf(ctx, err)
-		logger.Error(r.URL.Path + " " + err.Error())
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 	cpSrcDstSame := isStringEqual(pathJoin(srcBucket, srcObject), pathJoin(dstBucket, dstObject))
@@ -1075,8 +1089,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	checkCopyPrecondFn := func(o ObjectInfo) bool {
 		if objectAPI.IsEncryptionSupported() {
 			if _, err := DecryptObjectInfo(&o, r); err != nil {
-
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return true
 			}
 		}
@@ -1084,6 +1097,11 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	}
 	getOpts.CheckPrecondFn = checkCopyPrecondFn
 
+	// FIXME: a possible race exists between a parallel
+	// GetObject v/s CopyObject with metadata updates, ideally
+	// we should be holding write lock here but it is not
+	// possible due to other constraints such as knowing
+	// the type of source content etc.
 	lock := noLock
 	if !cpSrcDstSame {
 		lock = readLock
@@ -1095,7 +1113,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		if isErrPreconditionFailed(err) {
 			return
 		}
-		if globalBucketVersioningSys.Enabled(srcBucket) && gr != nil {
+		if globalBucketVersioningSys.PrefixEnabled(srcBucket, srcObject) && gr != nil {
 			// Versioning enabled quite possibly object is deleted might be delete-marker
 			// if present set the headers, no idea why AWS S3 sets these headers.
 			if gr.ObjInfo.VersionID != "" && gr.ObjInfo.DeleteMarker {
@@ -1115,8 +1133,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 
 	// maximum Upload size for object in a single CopyObject operation.
 	if isMaxObjectSize(srcInfo.Size) {
-
-		logger.Error(r.URL.Path + " " + "ErrEntityTooLarge")
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrEntityTooLarge), r.URL)
 		return
 	}
 
@@ -1127,30 +1144,30 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	}
 
 	var chStorageClass bool
-	if dstSc != "" {
+	if dstSc != "" && dstSc != srcInfo.StorageClass {
 		chStorageClass = true
 		srcInfo.metadataOnly = false
-	}
+	} // no changes in storage-class expected so its a metadataonly operation.
 
 	var reader io.Reader = gr
 
 	// Set the actual size to the compressed/decrypted size if encrypted.
 	actualSize, err := srcInfo.GetActualSize()
 	if err != nil {
-		logger.Error(r.URL.Path + " " + err.Error())
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 	length := actualSize
 
 	if !cpSrcDstSame {
-		if err := enforceBucketQuota(ctx, dstBucket, actualSize); err != nil {
-			logger.Error(r.URL.Path + " " + err.Error())
+		if err := enforceBucketQuotaHard(ctx, dstBucket, actualSize); err != nil {
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 			return
 		}
 	}
 
 	// Check if either the source is encrypted or the destination will be encrypted.
-	_, objectEncryption := crypto.IsRequested(r.Header)
+	objectEncryption := crypto.Requested(r.Header)
 	objectEncryption = objectEncryption || crypto.IsSourceEncrypted(srcInfo.UserDefined)
 
 	var compressMetadata map[string]string
@@ -1158,6 +1175,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	// Pass the decompressed stream to such calls.
 	isDstCompressed := objectAPI.IsCompressionSupported() &&
 		isCompressible(r.Header, dstObject) &&
+		length > minCompressibleSize &&
 		!isRemoteCopyRequired(ctx, srcBucket, dstBucket, objectAPI) && !cpSrcDstSame && !objectEncryption
 	if isDstCompressed {
 		compressMetadata = make(map[string]string, 2)
@@ -1166,7 +1184,9 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		compressMetadata[ReservedMetadataPrefix+"actual-size"] = strconv.FormatInt(actualSize, 10)
 
 		reader = etag.NewReader(reader, nil)
-		s2c := newS2CompressReader(reader, actualSize)
+		wantEncryption := objectAPI.IsEncryptionSupported() && crypto.Requested(r.Header)
+		s2c, cb := newS2CompressReader(reader, actualSize, wantEncryption)
+		dstOpts.IndexCB = cb
 		defer s2c.Close()
 		reader = etag.Wrap(s2c, reader)
 		length = -1
@@ -1178,23 +1198,23 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 
 	srcInfo.Reader, err = hash.NewReader(reader, length, "", "", actualSize)
 	if err != nil {
-		logger.Error(r.URL.Path + " " + err.Error())
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 
 	pReader := NewPutObjReader(srcInfo.Reader)
 
 	// Handle encryption
-	var encMetadata = make(map[string]string)
+	encMetadata := make(map[string]string)
 	if objectAPI.IsEncryptionSupported() {
 		// Encryption parameters not applicable for this object.
 		if _, ok := crypto.IsEncrypted(srcInfo.UserDefined); !ok && crypto.SSECopy.IsRequested(r.Header) {
-			logger.Error(r.URL.Path + " " + err.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, errInvalidEncryptionParameters), r.URL)
 			return
 		}
 		// Encryption parameters not present for this object.
 		if crypto.SSEC.IsEncrypted(srcInfo.UserDefined) && !crypto.SSECopy.IsRequested(r.Header) {
-			logger.Error(r.URL.Path + " " + err.Error())
+			writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidSSECustomerAlgorithm), r.URL)
 			return
 		}
 
@@ -1215,14 +1235,14 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		if sseC {
 			newKey, err = ParseSSECustomerRequest(r)
 			if err != nil {
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return
 			}
 		}
 		if crypto.S3KMS.IsRequested(r.Header) {
 			newKeyID, kmsCtx, err = crypto.S3KMS.ParseHTTP(r.Header)
 			if err != nil {
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return
 			}
 		}
@@ -1235,7 +1255,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		if cpSrcDstSame && (sseCopyC && sseC) && !chStorageClass {
 			oldKey, err = ParseSSECopyCustomerRequest(r.Header, srcInfo.UserDefined)
 			if err != nil {
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return
 			}
 
@@ -1246,8 +1266,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 			}
 
 			if err = rotateKey(oldKey, newKeyID, newKey, srcBucket, srcObject, encMetadata, kmsCtx); err != nil {
-
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return
 			}
 
@@ -1286,8 +1305,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 				kind, _ := crypto.IsRequested(r.Header)
 				encReader, objEncKey, err = newEncryptReader(srcInfo.Reader, kind, newKeyID, newKey, dstBucket, dstObject, encMetadata, kmsCtx)
 				if err != nil {
-
-					logger.Error(r.URL.Path + " " + err.Error())
+					writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 					return
 				}
 				reader = etag.Wrap(encReader, srcInfo.Reader)
@@ -1302,17 +1320,18 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 			// do not try to verify encrypted content
 			srcInfo.Reader, err = hash.NewReader(reader, targetSize, "", "", actualSize)
 			if err != nil {
-
-				logger.Error(r.URL.Path + " " + err.Error())
+				writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 				return
 			}
 
 			if isTargetEncrypted {
 				pReader, err = pReader.WithEncryption(srcInfo.Reader, &objEncKey)
 				if err != nil {
-
-					logger.Error(r.URL.Path + " " + err.Error())
+					writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 					return
+				}
+				if dstOpts.IndexCB != nil {
+					dstOpts.IndexCB = compressionIndexEncrypter(objEncKey, dstOpts.IndexCB)
 				}
 			}
 		}
@@ -1322,8 +1341,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 
 	srcInfo.UserDefined, err = getCpObjMetadataFromHeader(ctx, r, srcInfo.UserDefined)
 	if err != nil {
-
-		logger.Error(r.URL.Path + " " + err.Error())
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 
@@ -1332,8 +1350,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	if isDirectiveReplace(r.Header.Get(xhttp.AmzTagDirective)) {
 		objTags = r.Header.Get(xhttp.AmzObjectTagging)
 		if _, err := tags.ParseObjectTags(objTags); err != nil {
-
-			logger.Error(r.URL.Path + " " + err.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 			return
 		}
 		if globalIsGateway {
@@ -1342,10 +1359,25 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	}
 
 	if objTags != "" {
-		srcInfo.UserDefined[xhttp.AmzObjectTagging] = objTags
-	}
-	srcInfo.UserDefined = filterReplicationStatusMetadata(srcInfo.UserDefined)
+		lastTaggingTimestamp := srcInfo.UserDefined[ReservedMetadataPrefixLower+TaggingTimestamp]
+		if dstOpts.ReplicationRequest {
+			srcTimestamp := dstOpts.ReplicationSourceTaggingTimestamp
+			if !srcTimestamp.IsZero() {
+				ondiskTimestamp, err := time.Parse(lastTaggingTimestamp, time.RFC3339Nano)
+				// update tagging metadata only if replica  timestamp is newer than what's on disk
+				if err != nil || (err == nil && ondiskTimestamp.Before(srcTimestamp)) {
+					srcInfo.UserDefined[ReservedMetadataPrefixLower+TaggingTimestamp] = srcTimestamp.Format(time.RFC3339Nano)
+					srcInfo.UserDefined[xhttp.AmzObjectTagging] = objTags
+				}
+			}
+		} else {
+			srcInfo.UserDefined[xhttp.AmzObjectTagging] = objTags
+			srcInfo.UserDefined[ReservedMetadataPrefixLower+TaggingTimestamp] = UTCNow().Format(time.RFC3339Nano)
+		}
 
+	}
+
+	srcInfo.UserDefined = filterReplicationStatusMetadata(srcInfo.UserDefined)
 	srcInfo.UserDefined = objectlock.FilterObjectLockMetadata(srcInfo.UserDefined, true, true)
 	retPerms := isPutActionAllowed(ctx, getRequestAuthType(r), dstBucket, dstObject, r, iampolicy.PutObjectRetentionAction)
 	holdPerms := isPutActionAllowed(ctx, getRequestAuthType(r), dstBucket, dstObject, r, iampolicy.PutObjectLegalHoldAction)
@@ -1357,22 +1389,53 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	// apply default bucket configuration/governance headers for dest side.
 	retentionMode, retentionDate, legalHold, s3Err := checkPutObjectLockAllowed(ctx, r, dstBucket, dstObject, getObjectInfo, retPerms, holdPerms)
 	if s3Err == ErrNone && retentionMode.Valid() {
-		srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockMode)] = string(retentionMode)
-		srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockRetainUntilDate)] = retentionDate.UTC().Format(iso8601TimeFormat)
+		lastretentionTimestamp := srcInfo.UserDefined[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp]
+		if dstOpts.ReplicationRequest {
+			srcTimestamp := dstOpts.ReplicationSourceRetentionTimestamp
+			if !srcTimestamp.IsZero() {
+				ondiskTimestamp, err := time.Parse(lastretentionTimestamp, time.RFC3339Nano)
+				// update retention metadata only if replica  timestamp is newer than what's on disk
+				if err != nil || (err == nil && ondiskTimestamp.Before(srcTimestamp)) {
+					srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockMode)] = string(retentionMode)
+					srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockRetainUntilDate)] = retentionDate.UTC().Format(iso8601TimeFormat)
+					srcInfo.UserDefined[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp] = srcTimestamp.Format(time.RFC3339Nano)
+				}
+			}
+		} else {
+			srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockMode)] = string(retentionMode)
+			srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockRetainUntilDate)] = retentionDate.UTC().Format(iso8601TimeFormat)
+			srcInfo.UserDefined[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp] = UTCNow().Format(time.RFC3339Nano)
+		}
 	}
+
 	if s3Err == ErrNone && legalHold.Status.Valid() {
-		srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockLegalHold)] = string(legalHold.Status)
+		lastLegalHoldTimestamp := srcInfo.UserDefined[ReservedMetadataPrefixLower+ObjectLockLegalHoldTimestamp]
+		if dstOpts.ReplicationRequest {
+			srcTimestamp := dstOpts.ReplicationSourceLegalholdTimestamp
+			if !srcTimestamp.IsZero() {
+				ondiskTimestamp, err := time.Parse(lastLegalHoldTimestamp, time.RFC3339Nano)
+				// update legalhold metadata only if replica  timestamp is newer than what's on disk
+				if err != nil || (err == nil && ondiskTimestamp.Before(srcTimestamp)) {
+					srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockLegalHold)] = string(legalHold.Status)
+					srcInfo.UserDefined[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp] = srcTimestamp.Format(time.RFC3339Nano)
+				}
+			}
+		} else {
+			srcInfo.UserDefined[strings.ToLower(xhttp.AmzObjectLockLegalHold)] = string(legalHold.Status)
+		}
 	}
 	if s3Err != ErrNone {
-
-		logger.Error(r.URL.Path + " " + s3Err.String())
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Err), r.URL)
 		return
 	}
 	if rs := r.Header.Get(xhttp.AmzBucketReplicationStatus); rs != "" {
+		srcInfo.UserDefined[ReservedMetadataPrefixLower+ReplicaStatus] = replication.Replica.String()
+		srcInfo.UserDefined[ReservedMetadataPrefixLower+ReplicaTimestamp] = UTCNow().Format(time.RFC3339Nano)
 		srcInfo.UserDefined[xhttp.AmzBucketReplicationStatus] = rs
 	}
-	if ok, _ := mustReplicate(ctx, r, dstBucket, dstObject, getMustReplicateOptions(srcInfo, replication.UnsetReplicationType)); ok {
-		srcInfo.UserDefined[xhttp.AmzBucketReplicationStatus] = replication.Pending.String()
+	if dsc := mustReplicate(ctx, dstBucket, dstObject, getMustReplicateOptions(srcInfo, replication.UnsetReplicationType, dstOpts)); dsc.ReplicateAny() {
+		srcInfo.UserDefined[ReservedMetadataPrefixLower+ReplicationStatus] = dsc.PendingStatus()
+		srcInfo.UserDefined[ReservedMetadataPrefixLower+ReplicationTimestamp] = UTCNow().Format(time.RFC3339Nano)
 	}
 	// Store the preserved compression metadata.
 	for k, v := range compressMetadata {
@@ -1402,25 +1465,26 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		srcInfo.metadataOnly && srcOpts.VersionID == "" && !objectEncryption {
 		// If x-amz-metadata-directive is not set to REPLACE then we need
 		// to error out if source and destination are same.
-
-		logger.Error(r.URL.Path + " " + ErrInvalidCopyDest.String())
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopyDest), r.URL)
 		return
 	}
 
-	var objInfo ObjectInfo
+	remoteCallRequired := isRemoteCopyRequired(ctx, srcBucket, dstBucket, objectAPI)
 
-	if isRemoteCopyRequired(ctx, srcBucket, dstBucket, objectAPI) {
+	var objInfo ObjectInfo
+	var os *objSweeper
+	if remoteCallRequired {
 		var dstRecords []dns.SrvRecord
 		dstRecords, err = globalDNSConfig.Get(dstBucket)
 		if err != nil {
-			logger.Error(err.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 			return
 		}
 
 		// Send PutObject request to appropriate instance (in federated deployment)
 		core, rerr := getRemoteInstanceClient(r, getHostFromSrv(dstRecords))
 		if rerr != nil {
-			logger.Error(rerr.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, rerr), r.URL)
 			return
 		}
 		tag, err := tags.ParseObjectTags(objTags)
@@ -1439,14 +1503,13 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		remoteObjInfo, rerr := core.PutObject(ctx, dstBucket, dstObject, srcInfo.Reader,
 			srcInfo.Size, "", "", opts)
 		if rerr != nil {
-			logger.Error(rerr.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, rerr), r.URL)
 			return
 		}
 		objInfo.ETag = remoteObjInfo.ETag
 		objInfo.ModTime = remoteObjInfo.LastModified
 	} else {
-
-		os := newObjSweeper(dstBucket, dstObject).WithVersioning(dstOpts.Versioned, dstOpts.VersionSuspended)
+		os = newObjSweeper(dstBucket, dstObject).WithVersioning(dstOpts.Versioned, dstOpts.VersionSuspended)
 		// Get appropriate object info to identify the remote object to delete
 		if !srcInfo.metadataOnly {
 			goiOpts := os.GetOpts()
@@ -1466,19 +1529,17 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		// object is same then only metadata is updated.
 		objInfo, err = copyObjectFn(ctx, srcBucket, srcObject, dstBucket, dstObject, srcInfo, srcOpts, dstOpts)
 		if err != nil {
-			logger.Error(err.Error())
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 			return
-		}
-		if !globalTierConfigMgr.Empty() {
-			logger.LogIf(ctx, os.Sweep())
 		}
 	}
 
 	objInfo.ETag = getDecryptedETag(r.Header, objInfo, false)
-	generateCopyObjectResponse(objInfo.ETag, objInfo.ModTime)
+	response := generateCopyObjectResponse(objInfo.ETag, objInfo.ModTime)
+	encodedSuccessResponse := encodeResponse(response)
 
-	if replicate, sync := mustReplicate(ctx, r, dstBucket, dstObject, getMustReplicateOptions(objInfo, replication.UnsetReplicationType)); replicate {
-		scheduleReplication(ctx, objInfo.Clone(), objectAPI, sync, replication.ObjectReplicationType)
+	if dsc := mustReplicate(ctx, dstBucket, dstObject, getMustReplicateOptions(objInfo, replication.UnsetReplicationType, dstOpts)); dsc.ReplicateAny() {
+		scheduleReplication(ctx, objInfo.Clone(), objectAPI, dsc, replication.ObjectReplicationType)
 	}
 
 	setPutObjHeaders(w, objInfo, false)
@@ -1488,6 +1549,9 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	if srcOpts.VersionID != "" {
 		w.Header()[strings.ToLower(xhttp.AmzCopySourceVersionID)] = []string{srcOpts.VersionID}
 	}
+
+	// Write success response.
+	writeSuccessResponseXML(w, encodedSuccessResponse)
 
 	// Notify object created event.
 	sendEvent(eventArgs{
@@ -1500,6 +1564,12 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		Host:         handlers.GetSourceIP(r),
 	})
 
+	if !remoteCallRequired && !globalTierConfigMgr.Empty() {
+		// Schedule object for immediate transition if eligible.
+		enqueueTransitionImmediate(objInfo)
+		// Remove the transitioned object whose object version is being overwritten.
+		logger.LogIf(ctx, os.Sweep())
+	}
 }
 
 // CopyObjectHandler - Copy Object
