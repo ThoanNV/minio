@@ -1022,16 +1022,13 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	var vid string
-	vid = srcOpts.VersionID
-
-	if vid != "" && vid != nullVersionID {
-		_, err := uuid.Parse(vid)
+	if srcOpts.VersionID != "" && srcOpts.VersionID != nullVersionID {
+		_, err := uuid.Parse(srcOpts.VersionID)
 		if err != nil {
 			writeErrorResponse(ctx, w, toAPIError(ctx, VersionNotFound{
 				Bucket:    srcBucket,
 				Object:    srcObject,
-				VersionID: vid,
+				VersionID: srcOpts.VersionID,
 			}), r.URL)
 			return
 		}
