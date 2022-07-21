@@ -1001,10 +1001,6 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
-	var (
-		goi  ObjectInfo
-		gerr error
-	)
 
 	vid := opts.VersionID
 
@@ -1053,7 +1049,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	})
 
 	var srcOpts, dstOpts ObjectOptions
-	srcOpts, err := copySrcOpts(ctx, r, srcBucket, srcObject)
+	srcOpts, err = copySrcOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
