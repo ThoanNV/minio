@@ -438,9 +438,10 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 		deleteObject := deleteObjectsReq.Objects[i]
 		objectName := trimLeadingSlash(deleteObject.ObjectName)
 		deleteObjectsReq.Objects[i].ObjectName = objectName
-		objects[i] = deleteObjectsReq.Objects[i].ObjectV
 		// Copy Object to Trash
 		api.CopyObjectToTrash(w, r, bucket, objectName)
+		// End Copy
+		objects[i] = deleteObjectsReq.Objects[i].ObjectV
 	}
 
 	// Make sure to update context to print ObjectNames for multi objects.

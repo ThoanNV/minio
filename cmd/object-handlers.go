@@ -981,14 +981,6 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		}
 	}
 
-	vars := mux.Vars(r)
-	dstBucket := vars["bucket"]
-	dstObject, err := unescapePath(vars["object"])
-	if err != nil {
-		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
-		return
-	}
-
 	if s3Error := checkRequestAuthType(ctx, r, policy.PutObjectAction, dstBucket, dstObject); s3Error != ErrNone {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
@@ -1003,7 +995,6 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		cpSrcPath = u.Path
 	}
 
-	srcBucket, srcObject := path2BucketObject(cpSrcPath)
 	// If source object is empty or bucket is empty, reply back invalid copy source.
 	if srcObject == "" || srcBucket == "" {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopySource), r.URL)
