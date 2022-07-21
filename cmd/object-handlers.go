@@ -996,6 +996,18 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
+	opts, err := delOpts(ctx, r, srcBucket, srcObject)
+	if err != nil {
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+		return
+	}
+	var (
+		goi  ObjectInfo
+		gerr error
+	)
+
+	vid := opts.VersionID
+
 	// If source object is empty or bucket is empty, reply back invalid copy source.
 	if srcObject == "" || srcBucket == "" {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopySource), r.URL)
