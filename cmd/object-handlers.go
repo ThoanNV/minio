@@ -1523,7 +1523,6 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 
 	objInfo.ETag = getDecryptedETag(r.Header, objInfo, false)
 	response := generateCopyObjectResponse(objInfo.ETag, objInfo.ModTime)
-	encodedSuccessResponse := encodeResponse(response)
 
 	if dsc := mustReplicate(ctx, dstBucket, dstObject, getMustReplicateOptions(objInfo, replication.UnsetReplicationType, dstOpts)); dsc.ReplicateAny() {
 		scheduleReplication(ctx, objInfo.Clone(), objectAPI, dsc, replication.ObjectReplicationType)
@@ -1536,9 +1535,6 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 	if srcOpts.VersionID != "" {
 		w.Header()[strings.ToLower(xhttp.AmzCopySourceVersionID)] = []string{srcOpts.VersionID}
 	}
-
-	// Write success response.
-	writeSuccessResponseXML(w, encodedSuccessResponse)
 
 	// Notify object created event.
 	sendEvent(eventArgs{
