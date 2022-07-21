@@ -982,7 +982,7 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	opts, err := delOpts(ctx, r, srcBucket, srcObject)
+	opts, err := getOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 	  writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 	  return
@@ -1034,7 +1034,7 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 	})
 
 	var srcOpts, dstOpts ObjectOptions
-	srcOpts, err = copySrcOpts(ctx, r, srcBucket, srcObject)
+	srcOpts, err = getOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
