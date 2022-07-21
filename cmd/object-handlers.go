@@ -982,11 +982,6 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	if s3Error := checkRequestAuthType(ctx, r, policy.DeleteObjectAction, dstBucket, dstObject); s3Error != ErrNone {
-		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
-		return
-	}
-
 	opts, err := delOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 	  writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
