@@ -982,29 +982,10 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	opts, err := getOpts(ctx, r, srcBucket, srcObject)
-	if err != nil {
-	  writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
-	  return
-	}
-	vid := opts.VersionID
-
 	// If source object is empty or bucket is empty, reply back invalid copy source.
 	if srcObject == "" || srcBucket == "" {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopySource), r.URL)
 		return
-	}
-
-	if vid != "" && vid != nullVersionID {
-		_, err := uuid.Parse(vid)
-		if err != nil {
-			writeErrorResponse(ctx, w, toAPIError(ctx, VersionNotFound{
-				Bucket:    srcBucket,
-				Object:    srcObject,
-				VersionID: vid,
-			}), r.URL)
-			return
-		}
 	}
 
 	// Check if metadata directive is valid.
@@ -1040,7 +1021,21 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
-	srcOpts.VersionID = vid
+
+	var vid string
+	vid = srcOpts.VersionID
+
+	if vid != "" && vid != nullVersionID {
+		_, err := uuid.Parse(vid)
+		if err != nil {
+			writeErrorResponse(ctx, w, toAPIError(ctx, VersionNotFound{
+				Bucket:    srcBucket,
+				Object:    srcObject,
+				VersionID: vid,
+			}), r.URL)
+			return
+		}
+	}
 
 	// convert copy src encryption options for GET calls
 	getOpts := ObjectOptions{
