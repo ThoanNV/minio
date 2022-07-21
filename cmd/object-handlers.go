@@ -933,18 +933,11 @@ func isRemoteCallRequired(ctx context.Context, bucket string, objAPI ObjectLayer
 }
 
 //copy object to trash. This function is used in Delete Object
-func (api objectAPIHandlers) CopyObjectToTrash(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+func (api objectAPIHandlers) CopyObjectToTrash(w http.ResponseWriter, r *http.Request, srcBucket string, srcObject string) {
+	ctx := newContext(r, w, "DeleteObject")
 
 	trashEnable := env.Get("MINIO_TRASH", "ENABLE")
 	if !strings.EqualFold(trashEnable, "ENABLE") {
-		return
-	}
-
-	vars := mux.Vars(r)
-	srcBucket := vars["bucket"]
-	srcObject, err := unescapePath(vars["object"])
-	if err != nil {
-		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
 		return
 	}
 
@@ -961,10 +954,11 @@ func (api objectAPIHandlers) CopyObjectToTrash(ctx context.Context, w http.Respo
 	objectAPI := api.ObjectAPI()
 	objectAPI.MakeBucketWithLocation(ctx, dstBucket, trashOpts)
 
-	api.CopyObject(ctx, w, r, dstBucket, dstObject)
+	api.CopyObject(w, r, srcBucket, dstBucket, srcObject, dstObject)
 }
 
-func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWriter, r *http.Request, dstBucket string, dstObject string) {
+func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
+	ctx := newContext(r, w, "DeleteObject")
 
 	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
@@ -988,20 +982,16 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		}
 	}
 
-	vars := mux.Vars(r)
-	srcBucket := vars["bucket"]
-	srcObject, err := unescapePath(vars["object"])
-	if err != nil {
-		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+	if s3Error := checkRequestAuthType(ctx, r, policy.DeleteObjectAction, dstBucket, dstObject); s3Error != ErrNone {
+		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
 	}
 
 	opts, err := delOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
-		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
-		return
+	  writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+	  return
 	}
-
 	vid := opts.VersionID
 
 	// If source object is empty or bucket is empty, reply back invalid copy source.
@@ -1049,7 +1039,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 	})
 
 	var srcOpts, dstOpts ObjectOptions
-	srcOpts, err = copySrcOpts(ctx, r, srcBucket, srcObject)
+	srcOpts, err := copySrcOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
@@ -4073,7 +4063,7 @@ func (api objectAPIHandlers) DeleteObjectHandler(w http.ResponseWriter, r *http.
 	}
 
 	//Move to trash befor delete
-	api.CopyObjectToTrash(ctx, w, r)
+	api.CopyObjectToTrash(w, r, bucket, object)
 
 	opts, err := delOpts(ctx, r, bucket, object)
 	if err != nil {
