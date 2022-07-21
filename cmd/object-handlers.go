@@ -988,16 +988,14 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		}
 	}
 
-	// Read escaped copy source path to check for parameters.
-	cpSrcPath := r.Header.Get(xhttp.AmzCopySource)
-	var vid string
-	if u, err := url.Parse(cpSrcPath); err == nil {
-		vid = strings.TrimSpace(u.Query().Get(xhttp.VersionID))
-		// Note that url.Parse does the unescaping
-		cpSrcPath = u.Path
+	vars := mux.Vars(r)
+	srcBucket := vars["bucket"]
+	srcObject, err := unescapePath(vars["object"])
+	if err != nil {
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+		return
 	}
 
-	srcBucket, srcObject := path2BucketObject(cpSrcPath)
 	// If source object is empty or bucket is empty, reply back invalid copy source.
 	if srcObject == "" || srcBucket == "" {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(ErrInvalidCopySource), r.URL)
