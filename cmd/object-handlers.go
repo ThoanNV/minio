@@ -934,13 +934,13 @@ func isRemoteCallRequired(ctx context.Context, bucket string, objAPI ObjectLayer
 
 //copy object to trash. This function is used in Delete Object
 func (api objectAPIHandlers) CopyObjectToTrash(w http.ResponseWriter, r *http.Request, srcBucket string, srcObject string) {
+	ctx := newContext(r, w, "DeleteObject")
 
 	trashEnable := env.Get("MINIO_TRASH", "ENABLE")
 	if !strings.EqualFold(trashEnable, "ENABLE") {
 		return
 	}
 
-	ctx := newContext(r, w, "CopyObject")
 	dstBucket := "trash"
 	dstObject := srcBucket + "/" + srcObject
 	if srcBucket == dstBucket {
@@ -954,10 +954,11 @@ func (api objectAPIHandlers) CopyObjectToTrash(w http.ResponseWriter, r *http.Re
 	objectAPI := api.ObjectAPI()
 	objectAPI.MakeBucketWithLocation(ctx, dstBucket, trashOpts)
 
-	api.CopyObject(ctx, w, r, srcBucket, dstBucket, srcObject, dstObject)
+	api.CopyObject(w, r, srcBucket, dstBucket, srcObject, dstObject)
 }
 
-func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
+func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
+	ctx := newContext(r, w, "DeleteObject")
 
 	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
@@ -981,7 +982,7 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 		}
 	}
 
-	if s3Error := checkRequestAuthType(ctx, r, policy.PutObjectAction, dstBucket, dstObject); s3Error != ErrNone {
+	if s3Error := checkRequestAuthType(ctx, r, policy.DeleteObjectAction, dstBucket, dstObject); s3Error != ErrNone {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
 	}
@@ -1011,11 +1012,6 @@ func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWrit
 			}), r.URL)
 			return
 		}
-	}
-
-	if s3Error := checkRequestAuthType(ctx, r, policy.GetObjectAction, srcBucket, srcObject); s3Error != ErrNone {
-		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
-		return
 	}
 
 	// Check if metadata directive is valid.
