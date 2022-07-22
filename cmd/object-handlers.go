@@ -933,8 +933,7 @@ func isRemoteCallRequired(ctx context.Context, bucket string, objAPI ObjectLayer
 }
 
 //copy object to trash. This function is used in Delete Object
-func (api objectAPIHandlers) CopyObjectToTrash(w http.ResponseWriter, r *http.Request, srcBucket string, srcObject string) {
-	ctx := newContext(r, w, "DeleteObject")
+func (api objectAPIHandlers) CopyObjectToTrash(ctx context.Context, w http.ResponseWriter, r *http.Request, srcBucket string, srcObject string) {
 
 	trashEnable := env.Get("MINIO_TRASH", "ENABLE")
 	if !strings.EqualFold(trashEnable, "ENABLE") {
@@ -957,8 +956,7 @@ func (api objectAPIHandlers) CopyObjectToTrash(w http.ResponseWriter, r *http.Re
 	api.CopyObject(w, r, srcBucket, dstBucket, srcObject, dstObject)
 }
 
-func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
-	ctx := newContext(r, w, "DeleteObject")
+func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
 
 	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
@@ -4050,7 +4048,7 @@ func (api objectAPIHandlers) DeleteObjectHandler(w http.ResponseWriter, r *http.
 	}
 
 	//Move to trash befor delete
-	api.CopyObjectToTrash(w, r, bucket, object)
+	api.CopyObjectToTrash(ctx, w, r, bucket, object)
 
 	opts, err := delOpts(ctx, r, bucket, object)
 	if err != nil {
