@@ -953,7 +953,7 @@ func (api objectAPIHandlers) CopyObjectToTrash(ctx context.Context, w http.Respo
 	objectAPI := api.ObjectAPI()
 	objectAPI.MakeBucketWithLocation(ctx, dstBucket, trashOpts)
 
-	api.CopyObject(w, r, srcBucket, dstBucket, srcObject, dstObject)
+	api.CopyObject(ctx, w, r, srcBucket, dstBucket, srcObject, dstObject)
 }
 
 func (api objectAPIHandlers) CopyObject(ctx context.Context, w http.ResponseWriter, r *http.Request, srcBucket string, dstBucket string, srcObject string, dstObject string) {
