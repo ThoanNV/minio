@@ -1015,7 +1015,7 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 	})
 
 	var srcOpts, dstOpts ObjectOptions
-	srcOpts, err = getOpts(ctx, r, srcBucket, srcObject)
+	srcOpts, err := getOpts(ctx, r, srcBucket, srcObject)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
@@ -1045,7 +1045,7 @@ func (api objectAPIHandlers) CopyObject(w http.ResponseWriter, r *http.Request, 
 		getOpts.ServerSideEncryption = getSSE
 	}
 
-	dstOpts, err = copyDstOpts(ctx, r, dstBucket, dstObject, nil)
+	dstOpts, err := copyDstOpts(ctx, r, dstBucket, dstObject, nil)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
