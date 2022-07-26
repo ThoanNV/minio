@@ -946,12 +946,12 @@ func (api objectAPIHandlers) CopyObjectToTrash(ctx context.Context, w http.Respo
 		return
 	}
 
-	trashOpts := BucketOptions{
-		LockEnabled:       true,
-		VersioningEnabled: true,
-	}
-	objectAPI := api.ObjectAPI()
-	objectAPI.MakeBucketWithLocation(ctx, dstBucket, trashOpts)
+	//trashOpts := BucketOptions{
+	//	LockEnabled:       true,
+	//	VersioningEnabled: true,
+	//}
+	//objectAPI := api.ObjectAPI()
+	//objectAPI.MakeBucketWithLocation(ctx, dstBucket, trashOpts)
 
 	api.CopyObject(ctx, w, r, srcBucket, dstBucket, srcObject, dstObject)
 }
